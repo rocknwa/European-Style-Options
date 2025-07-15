@@ -14,6 +14,11 @@ import "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 contract Options is ReentrancyGuard, Ownable, Pausable {
     using SafeERC20 for IERC20;
 
+    // Constants for magic numbers
+    uint256 private constant ONE_ETHER = 1e18; // 10^18 for ETH decimals
+    uint256 private constant ONE_DAY_IN_SECONDS = 1 days; // 1 day in seconds
+    uint256 private constant PRICE_FEED_STALENESS_THRESHOLD = 1 hours; // Price feed staleness threshold
+
     /// @notice Chainlink price feed for DAI/ETH
     AggregatorV3Interface internal immutable daiEthPriceFeed;
 
@@ -21,7 +26,7 @@ contract Options is ReentrancyGuard, Ownable, Pausable {
     IERC20 internal immutable dai;
 
     /// @notice Counter for generating unique option IDs
-    uint256 public s_optionCounter;
+    uint256 s_optionCounter;
 
     /// @notice Mapping of option ID to Option details
     mapping(uint256 => Option) public s_optionIdToOption;
@@ -186,8 +191,8 @@ contract Options is ReentrancyGuard, Ownable, Pausable {
         whenNotPaused
         moreThanZero(_amount, _strike, _premiumDue)
     {
-        uint256 marketPriceDaiPerEth = getPriceFeed(1e18); // Get DAI per 1 ETH (normalized to 18 decimals)
-        uint256 requiredCollateral = (_amount * 1e18) / marketPriceDaiPerEth; // ETH collateral needed
+        uint256 marketPriceDaiPerEth = getPriceFeed(ONE_ETHER); // Get DAI per 1 ETH (normalized to 18 decimals)
+        uint256 requiredCollateral = (_amount * ONE_ETHER) / marketPriceDaiPerEth; // ETH collateral needed
 
         if (msg.value != requiredCollateral) revert InsufficientCallCollateral();
         if (marketPriceDaiPerEth != _strike) revert CallStrikeNotMarketPrice();
@@ -199,7 +204,7 @@ contract Options is ReentrancyGuard, Ownable, Pausable {
             amount: _amount,
             strike: _strike,
             premiumDue: _premiumDue,
-            expiration: block.timestamp + (_daysToExpiry * 1 days),
+            expiration: block.timestamp + (_daysToExpiry * ONE_DAY_IN_SECONDS),
             collateral: msg.value,
             optionState: OptionState.Open,
             optionType: OptionType.Call
@@ -207,7 +212,13 @@ contract Options is ReentrancyGuard, Ownable, Pausable {
 
         s_tradersPosition[msg.sender].push(optionId);
         emit CallOptionOpen(
-            optionId, msg.sender, _amount, _strike, _premiumDue, block.timestamp + (_daysToExpiry * 1 days), msg.value
+            optionId,
+            msg.sender,
+            _amount,
+            _strike,
+            _premiumDue,
+            block.timestamp + (_daysToExpiry * ONE_DAY_IN_SECONDS),
+            msg.value
         );
     }
 
@@ -215,22 +226,19 @@ contract Options is ReentrancyGuard, Ownable, Pausable {
     /// @param _optionId ID of the option to buy
     function buyCallOption(uint256 _optionId)
         external
+        nonReentrant
         whenNotPaused
         optionExists(_optionId)
         isValidOpenOption(_optionId)
-        nonReentrant
     {
         Option storage option = s_optionIdToOption[_optionId];
+
         if (option.optionType != OptionType.Call) revert NotCallOption();
-
-        dai.safeTransferFrom(msg.sender, address(this), option.premiumDue);
-        dai.safeTransfer(option.writer, option.premiumDue);
-
         option.buyer = msg.sender;
         option.optionState = OptionState.Bought;
         s_tradersPosition[msg.sender].push(_optionId);
-
         emit CallOptionBought(msg.sender, _optionId);
+        dai.safeTransferFrom(msg.sender, option.writer, option.premiumDue);
     }
 
     /// @notice Write a put option, locking ETH as collateral
@@ -244,8 +252,8 @@ contract Options is ReentrancyGuard, Ownable, Pausable {
         whenNotPaused
         moreThanZero(_amount, _strike, _premiumDue)
     {
-        uint256 marketPriceDaiPerEth = getPriceFeed(1e18); // Get DAI per 1 ETH
-        uint256 requiredCollateral = (_amount * 1e18) / marketPriceDaiPerEth; // ETH collateral needed
+        uint256 marketPriceDaiPerEth = getPriceFeed(ONE_ETHER); // Get DAI per 1 ETH
+        uint256 requiredCollateral = (_amount * ONE_ETHER) / marketPriceDaiPerEth; // ETH collateral needed
 
         if (msg.value != requiredCollateral) revert InsufficientPutCollateral();
         if (marketPriceDaiPerEth != _strike) revert PutStrikeNotMarketPrice();
@@ -257,7 +265,7 @@ contract Options is ReentrancyGuard, Ownable, Pausable {
             amount: _amount,
             strike: _strike,
             premiumDue: _premiumDue,
-            expiration: block.timestamp + (_daysToExpiry * 1 days),
+            expiration: block.timestamp + (_daysToExpiry * ONE_DAY_IN_SECONDS),
             collateral: msg.value,
             optionState: OptionState.Open,
             optionType: OptionType.Put
@@ -265,7 +273,13 @@ contract Options is ReentrancyGuard, Ownable, Pausable {
 
         s_tradersPosition[msg.sender].push(optionId);
         emit PutOptionOpen(
-            optionId, msg.sender, _amount, _strike, _premiumDue, block.timestamp + (_daysToExpiry * 1 days), msg.value
+            optionId,
+            msg.sender,
+            _amount,
+            _strike,
+            _premiumDue,
+            block.timestamp + (_daysToExpiry * ONE_DAY_IN_SECONDS),
+            msg.value
         );
     }
 
@@ -273,22 +287,20 @@ contract Options is ReentrancyGuard, Ownable, Pausable {
     /// @param _optionId ID of the option to buy
     function buyPutOption(uint256 _optionId)
         external
+        nonReentrant
         whenNotPaused
         optionExists(_optionId)
         isValidOpenOption(_optionId)
-        nonReentrant
     {
         Option storage option = s_optionIdToOption[_optionId];
         if (option.optionType != OptionType.Put) revert NotPutOption();
-
-        dai.safeTransferFrom(msg.sender, address(this), option.premiumDue);
-        dai.safeTransfer(option.writer, option.premiumDue);
 
         option.buyer = msg.sender;
         option.optionState = OptionState.Bought;
         s_tradersPosition[msg.sender].push(_optionId);
 
         emit PutOptionBought(msg.sender, _optionId);
+        dai.safeTransferFrom(msg.sender, option.writer, option.premiumDue);
     }
 
     /// @notice Exercise a call option at expiration
@@ -296,9 +308,9 @@ contract Options is ReentrancyGuard, Ownable, Pausable {
     function exerciseCallOption(uint256 _optionId)
         external
         payable
+        nonReentrant
         whenNotPaused
         optionExists(_optionId)
-        nonReentrant
     {
         Option storage option = s_optionIdToOption[_optionId];
         if (msg.sender != option.buyer) revert NotBuyer();
@@ -306,41 +318,36 @@ contract Options is ReentrancyGuard, Ownable, Pausable {
         if (option.expiration >= block.timestamp) revert NotExpired();
         if (option.optionType != OptionType.Call) revert NotCallOption();
 
-        uint256 marketPriceDaiPerEth = getPriceFeed(1e18);
+        uint256 marketPriceDaiPerEth = getPriceFeed(ONE_ETHER);
         if (marketPriceDaiPerEth <= option.strike) revert CallPriceNotGreaterThanStrike();
 
-        dai.safeTransferFrom(msg.sender, address(this), option.strike);
-        if (address(this).balance < option.collateral) revert InsufficientEthBalance();
-        (bool success,) = payable(msg.sender).call{value: option.collateral}("");
-        if (!success) revert TransferFailed();
-
-        dai.safeTransfer(option.writer, option.strike);
         option.optionState = OptionState.Exercised;
 
+        if (address(this).balance < option.collateral) revert InsufficientEthBalance();
+
         emit CallOptionExercised(msg.sender, _optionId);
+        (bool success,) = payable(msg.sender).call{value: option.collateral}("");
+        if (!success) revert TransferFailed();
     }
 
     /// @notice Exercise a put option at expiration
     /// @param _optionId ID of the option to exercise
-    function exercisePutOption(uint256 _optionId) external payable whenNotPaused optionExists(_optionId) nonReentrant {
+    function exercisePutOption(uint256 _optionId) external payable nonReentrant whenNotPaused optionExists(_optionId) {
         Option storage option = s_optionIdToOption[_optionId];
         if (msg.sender != option.buyer) revert NotBuyer();
         if (option.optionState != OptionState.Bought) revert NeverBought();
         if (option.expiration >= block.timestamp) revert NotExpired();
         if (option.optionType != OptionType.Put) revert NotPutOption();
 
-        uint256 marketPriceDaiPerEth = getPriceFeed(1e18);
+        uint256 marketPriceDaiPerEth = getPriceFeed(ONE_ETHER);
         if (marketPriceDaiPerEth >= option.strike) revert PutPriceNotLessThanStrike();
 
-        dai.safeTransferFrom(msg.sender, address(this), option.strike);
-        if (address(this).balance < option.collateral) revert InsufficientEthBalance();
-        (bool success,) = payable(msg.sender).call{value: option.collateral}("");
-        if (!success) revert TransferFailed();
-
-        dai.safeTransfer(option.writer, option.strike);
         option.optionState = OptionState.Exercised;
 
+        if (address(this).balance < option.collateral) revert InsufficientEthBalance();
         emit PutOptionExercised(msg.sender, _optionId);
+        (bool success,) = payable(msg.sender).call{value: option.collateral}("");
+        if (!success) revert TransferFailed();
     }
 
     /// @notice Cancel an expired, worthless option
@@ -351,7 +358,7 @@ contract Options is ReentrancyGuard, Ownable, Pausable {
         if (option.optionState != OptionState.Bought) revert NeverBought();
         if (option.expiration >= block.timestamp) revert NotExpired();
 
-        uint256 marketPriceDaiPerEth = getPriceFeed(1e18);
+        uint256 marketPriceDaiPerEth = getPriceFeed(ONE_ETHER);
         if (option.optionType == OptionType.Call) {
             if (marketPriceDaiPerEth >= option.strike) revert CallPriceNotLessThanStrike();
         } else {
@@ -364,18 +371,17 @@ contract Options is ReentrancyGuard, Ownable, Pausable {
 
     /// @notice Retrieve ETH collateral from a cancelled option
     /// @param _optionId ID of the cancelled option
-    function retrieveExpiredFunds(uint256 _optionId) external whenNotPaused nonReentrant optionExists(_optionId) {
+    function retrieveExpiredFunds(uint256 _optionId) external nonReentrant whenNotPaused optionExists(_optionId) {
         Option storage option = s_optionIdToOption[_optionId];
+        if (msg.sender != option.writer) revert NotWriter();
 
         if (option.optionState != OptionState.Cancelled) revert NotCancelled();
         if (option.expiration >= block.timestamp) revert NotExpired();
-        if (msg.sender != option.writer) revert NotWriter();
 
         if (address(this).balance < option.collateral) revert InsufficientEthBalance();
+        emit FundsRetrieved(msg.sender, _optionId, option.collateral);
         (bool success,) = payable(msg.sender).call{value: option.collateral}("");
         if (!success) revert TransferFailed();
-
-        emit FundsRetrieved(msg.sender, _optionId, option.collateral);
     }
 
     /// @notice Get the current DAI/ETH price from Chainlink
@@ -384,7 +390,7 @@ contract Options is ReentrancyGuard, Ownable, Pausable {
     function getPriceFeed(uint256 _amountInDai) public view returns (uint256) {
         (, int256 price,, uint256 updatedAt,) = daiEthPriceFeed.latestRoundData();
         if (price <= 0) revert InvalidPrice();
-        if (updatedAt < block.timestamp - 1 hours) revert InvalidPriceFeed();
+        if (updatedAt < block.timestamp - PRICE_FEED_STALENESS_THRESHOLD) revert InvalidPriceFeed();
         uint8 decimals = daiEthPriceFeed.decimals();
         return (uint256(price) * _amountInDai) / (10 ** decimals);
     }
