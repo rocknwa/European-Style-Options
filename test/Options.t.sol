@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import "../src/Options.sol";
-import "./TestFun.sol";
-import "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
-import "chainlink-brownie-contracts/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+import {TestFun} from "./TestFun.sol";
+import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {AggregatorV3Interface} from
+    "chainlink-brownie-contracts/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 
 contract OptionsTest is Test {
     Options public optionsContract;
@@ -114,10 +115,6 @@ contract OptionsTest is Test {
             abi.encode(0, int256(option.strike + 100 * 1e8), 0, block.timestamp, 0)
         );
 
-        // Approve DAI transfer for exercising (strike price)
-        vm.prank(buyer);
-        dai.approve(address(optionsContract), option.strike);
-
         // Exercise the call option
         vm.prank(buyer);
         optionsContract.exerciseCallOption(0);
@@ -179,10 +176,6 @@ contract OptionsTest is Test {
             abi.encodeWithSelector(AggregatorV3Interface.latestRoundData.selector),
             abi.encode(0, int256(option.strike - 100 * 1e8), 0, block.timestamp, 0)
         );
-
-        // Approve DAI transfer for exercising (strike price)
-        vm.prank(buyer);
-        dai.approve(address(optionsContract), option.strike);
 
         // Exercise the put option
         vm.prank(buyer);
@@ -1027,67 +1020,6 @@ contract OptionsTest is Test {
         optionsContract.exercisePutOption(0);
     }
 
-    // Test DAI transfer failure in exerciseCallOption due to insufficient balance
-    function test_RevertExerciseCallOptionDaiInsufficientBalance() public {
-        uint256 amount = 1e15;
-        uint256 premiumDue = 1e17;
-        uint256 daysToExpiry = 7;
-        uint256 marketPrice = optionsContract.getPriceFeed(1e18);
-        uint256 requiredCollateral = (amount * 1e18) / marketPrice;
-
-        vm.deal(writer, requiredCollateral);
-        vm.prank(writer);
-        optionsContract.writeCallOption{value: requiredCollateral}(amount, marketPrice, premiumDue, daysToExpiry);
-
-        vm.prank(buyer);
-        optionsContract.buyCallOption(0);
-
-        vm.warp(block.timestamp + 8 days);
-        vm.mockCall(
-            DAI_ETH_PRICE_FEED,
-            abi.encodeWithSelector(AggregatorV3Interface.latestRoundData.selector),
-            abi.encode(0, int256(marketPrice + 100 * 1e8), 0, block.timestamp, 0)
-        );
-
-        // Clear buyer's DAI balance
-        deal(DAI_ADDRESS, buyer, 0);
-
-        vm.prank(buyer);
-        vm.expectRevert();
-        optionsContract.exerciseCallOption(0);
-    }
-
-    // Test DAI transfer failure in exercisePutOption due to insufficient allowance
-    function test_RevertExercisePutOptionDaiInsufficientAllowance() public {
-        uint256 amount = 1e15;
-        uint256 premiumDue = 1e17;
-        uint256 daysToExpiry = 7;
-        uint256 marketPrice = optionsContract.getPriceFeed(1e18);
-        uint256 requiredCollateral = (amount * 1e18) / marketPrice;
-
-        vm.deal(writer, requiredCollateral);
-        vm.prank(writer);
-        optionsContract.writePutOption{value: requiredCollateral}(amount, marketPrice, premiumDue, daysToExpiry);
-
-        vm.prank(buyer);
-        optionsContract.buyPutOption(0);
-
-        vm.warp(block.timestamp + 8 days);
-        vm.mockCall(
-            DAI_ETH_PRICE_FEED,
-            abi.encodeWithSelector(AggregatorV3Interface.latestRoundData.selector),
-            abi.encode(0, int256(marketPrice - 100 * 1e8), 0, block.timestamp, 0)
-        );
-
-        // Revoke DAI allowance
-        vm.prank(buyer);
-        dai.approve(address(optionsContract), 0);
-
-        vm.prank(buyer);
-        vm.expectRevert();
-        optionsContract.exercisePutOption(0);
-    }
-
     // Test optionExpiresWorthless with market price equal to strike for call
     function test_RevertOptionExpiresWorthlessCallPriceEqualStrike() public {
         uint256 amount = 1e15;
@@ -1202,6 +1134,4 @@ contract OptionsTest is Test {
         vm.expectRevert(Options.PutStrikeNotMarketPrice.selector);
         optionsContract.writePutOption{value: requiredCollateral}(amount, marketPrice + 1, premiumDue, daysToExpiry);
     }
-
 }
-
